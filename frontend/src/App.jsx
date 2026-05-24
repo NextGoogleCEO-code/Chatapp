@@ -1,16 +1,19 @@
 import React, { useState, useEffect } from 'react';
+import { io } from 'socket.io-client';
 import Auth from './Auth.jsx';
 import Sidebar from './Sidebar.jsx';
 import ChatWindow from './ChatWindow.jsx';
 import './App.css';
 
 const BASE = 'http://localhost:5000/api';
+const SOCKET_URL = 'http://localhost:5000';
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('chat_token') || '');
   const [username, setUsername] = useState(localStorage.getItem('chat_username') || '');
   const [conversations, setConversations] = useState([]);
   const [activeConv, setActiveConv] = useState(null);
+  const [socket, setSocket] = useState(null);
 
   const authHeaders = { Authorization: `Bearer ${token}` };
 
@@ -26,6 +29,10 @@ function App() {
     setUsername('');
     setConversations([]);
     setActiveConv(null);
+    if (socket) {
+      socket.disconnect();
+      setSocket(null);
+    }
   };
 
   const fetchConversations = async () => {
@@ -40,8 +47,50 @@ function App() {
 
   useEffect(() => {
     fetchConversations();
-    const interval = setInterval(fetchConversations, 5000);
-    return () => clearInterval(interval);
+  }, [token]);
+
+  // Socket.io connection
+  useEffect(() => {
+    if (!token) return;
+
+    const newSocket = io(SOCKET_URL, {
+      auth: { token }
+    });
+
+    newSocket.on('connect_error', (err) => {
+      console.error('Socket connection error:', err.message);
+      if (err.message === 'Invalid token.') {
+        handleLogout();
+      }
+    });
+
+    newSocket.on('conversation_updated', (update) => {
+      setConversations((prev) => {
+        let found = false;
+        const next = prev.map((c) => {
+          if (c._id === update.conversationId) {
+            found = true;
+            return { ...c, lastMessage: update.lastMessage, updatedAt: update.updatedAt };
+          }
+          return c;
+        });
+
+        // If the conversation isn't in our list yet, fetch the whole list again to grab it
+        // Or if it was found, sort them so the updated one is at the top
+        if (!found) {
+          fetchConversations();
+          return prev;
+        }
+
+        return next.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+      });
+    });
+
+    setSocket(newSocket);
+
+    return () => {
+      newSocket.disconnect();
+    };
   }, [token]);
 
   // Start or open a conversation with a user from search results
@@ -55,24 +104,12 @@ function App() {
       const conv = await res.json();
       if (!res.ok) return;
 
-      // Add to list if not already present
       setConversations((prev) => {
         const exists = prev.find((c) => c._id === conv._id);
         return exists ? prev : [conv, ...prev];
       });
       setActiveConv(conv);
     } catch (_) {}
-  };
-
-  const onMessageSent = (convId, text) => {
-    // Update lastMessage preview in the sidebar without waiting for a poll
-    setConversations((prev) =>
-      prev.map((c) =>
-        c._id === convId
-          ? { ...c, lastMessage: { text, sender: username, timestamp: new Date() } }
-          : c
-      )
-    );
   };
 
   if (!token) {
@@ -91,10 +128,10 @@ function App() {
         onLogout={handleLogout}
       />
       <ChatWindow
+        socket={socket}
         conversation={activeConv}
         username={username}
         token={token}
-        onMessageSent={onMessageSent}
         onUnauthorized={handleLogout}
       />
     </div>

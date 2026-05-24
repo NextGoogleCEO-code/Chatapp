@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 
 const BASE = 'http://localhost:5000/api';
 
-export default function ChatWindow({ conversation, username, token, onMessageSent, onUnauthorized }) {
+export default function ChatWindow({ socket, conversation, username, token, onUnauthorized }) {
   const [messages, setMessages] = useState([]);
   const [inputText, setInputText] = useState('');
   const [error, setError] = useState('');
@@ -32,14 +32,26 @@ export default function ChatWindow({ conversation, username, token, onMessageSen
   }, [conversation?._id]);
 
   useEffect(() => {
-    if (!conversation) return;
-    const interval = setInterval(fetchMessages, 3000);
-    return () => clearInterval(interval);
-  }, [conversation?._id, token]);
-
-  useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Socket.io room management and message listening
+  useEffect(() => {
+    if (!socket || !conversation) return;
+
+    socket.emit('join_conversation', conversation._id);
+
+    const handleNewMessage = (msg) => {
+      setMessages((prev) => [...prev, msg]);
+    };
+
+    socket.on('new_message', handleNewMessage);
+
+    return () => {
+      socket.off('new_message', handleNewMessage);
+      socket.emit('leave_conversation', conversation._id);
+    };
+  }, [socket, conversation?._id]);
 
   const handleSend = async (e) => {
     e.preventDefault();
@@ -58,8 +70,7 @@ export default function ChatWindow({ conversation, username, token, onMessageSen
       if (res.status === 401) { onUnauthorized(); return; }
       const saved = await res.json();
       if (!res.ok) { setError(saved.error || 'Failed to send.'); return; }
-      setMessages((prev) => [...prev, saved]);
-      onMessageSent(conversation._id, text);
+      // We don't manually append the message here because the socket will broadcast it back to us
     } catch (_) {
       setError('Server not reachable.');
     }

@@ -2,6 +2,7 @@ import express from 'express';
 import Message from '../models/Message.js';
 import Conversation from '../models/Conversation.js';
 import protect from '../middleware/auth.js';
+import { getIO } from '../socket.js';
 
 const router = express.Router();
 
@@ -64,6 +65,19 @@ router.post('/:conversationId', async (req, res) => {
       },
       updatedAt: new Date()
     });
+
+    const io = getIO();
+    if (io) {
+      io.to(req.params.conversationId).emit('new_message', message);
+      // Also emit a global event to update conversation sidebars for participants
+      conv.participants.forEach(p => {
+        io.to(p.toString()).emit('conversation_updated', {
+          conversationId: req.params.conversationId,
+          lastMessage: { text: text.trim(), sender: req.user.username, timestamp: message.timestamp },
+          updatedAt: new Date()
+        });
+      });
+    }
 
     res.status(201).json(message);
   } catch (err) {
