@@ -2,6 +2,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import authRoutes from './routes/auth.js';
 import messageRoutes from './routes/messages.js';
 
 dotenv.config();
@@ -15,26 +16,23 @@ app.use(cors());
 app.use(express.json());
 
 // Routes
+app.use('/api/auth', authRoutes);
 app.use('/api/messages', messageRoutes);
 
-// Basic Status Route
+// Basic health check
 app.get('/api/status', (req, res) => {
-  res.json({
-    status: 'online',
-    message: 'Chatapp Backend Server is running smoothly.',
-    timestamp: new Date()
-  });
+  res.json({ status: 'online', timestamp: new Date() });
 });
 
-// Database Connection
+// Database connection
 mongoose
   .connect(MONGODB_URI)
-  .then(() => console.log('✅ Connected to MongoDB successfully.'))
+  .then(() => console.log('Connected to MongoDB.'))
   .catch((err) => {
-    console.error('❌ MongoDB Connection Error:', err.message);
-    console.log('⚠️ Running in offline database fallback mode (data will not persist).');
+    console.error('MongoDB connection error:', err.message);
+    console.log('Running without database. Messages will not persist.');
   });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server listening on http://localhost:${PORT}`);
+  console.log(`Server running on http://localhost:${PORT}`);
 });
