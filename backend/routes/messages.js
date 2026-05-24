@@ -1,52 +1,73 @@
 import express from 'express';
 import Message from '../models/Message.js';
-import mongoose from 'mongoose';
+import Conversation from '../models/Conversation.js';
 import protect from '../middleware/auth.js';
 
 const router = express.Router();
 
-// All message routes require a valid JWT
 router.use(protect);
 
-// GET: Retrieve all messages sorted by time
-router.get('/', async (req, res) => {
+// Helper: verify the requesting user is a participant in the conversation
+async function verifyParticipant(conversationId, userId, res) {
+  const conv = await Conversation.findById(conversationId);
+  if (!conv) {
+    res.status(404).json({ error: 'Conversation not found.' });
+    return null;
+  }
+  const isParticipant = conv.participants.some((p) => p.toString() === userId);
+  if (!isParticipant) {
+    res.status(403).json({ error: 'Access denied.' });
+    return null;
+  }
+  return conv;
+}
+
+// GET /api/messages/:conversationId
+router.get('/:conversationId', async (req, res) => {
   try {
-    if (mongoose.connection.readyState === 1) {
-      const messages = await Message.find().sort({ timestamp: 1 });
-      return res.json(messages);
-    } else {
-      return res.json([]);
-    }
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to retrieve messages: ' + error.message });
+    const conv = await verifyParticipant(req.params.conversationId, req.user.id, res);
+    if (!conv) return;
+
+    const messages = await Message.find({ conversation: req.params.conversationId })
+      .sort({ timestamp: 1 });
+
+    res.json(messages);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch messages: ' + err.message });
   }
 });
 
-// POST: Send a new message. Sender is taken from the JWT token.
-router.post('/', async (req, res) => {
+// POST /api/messages/:conversationId
+router.post('/:conversationId', async (req, res) => {
   const { text } = req.body;
-  const sender = req.user.username;
 
   if (!text || !text.trim()) {
     return res.status(400).json({ error: 'Message text is required.' });
   }
 
   try {
-    if (mongoose.connection.readyState === 1) {
-      const message = new Message({ sender, text: text.trim() });
-      const saved = await message.save();
-      return res.status(201).json(saved);
-    } else {
-      // If no DB, return the message with a mock id so the frontend can still display it
-      return res.status(201).json({
-        _id: 'mock-' + Date.now(),
-        sender,
+    const conv = await verifyParticipant(req.params.conversationId, req.user.id, res);
+    if (!conv) return;
+
+    const message = await Message.create({
+      conversation: req.params.conversationId,
+      sender: req.user.username,
+      text: text.trim()
+    });
+
+    // Update lastMessage snapshot on the conversation
+    await Conversation.findByIdAndUpdate(req.params.conversationId, {
+      lastMessage: {
         text: text.trim(),
-        timestamp: new Date()
-      });
-    }
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to send message: ' + error.message });
+        sender: req.user.username,
+        timestamp: message.timestamp
+      },
+      updatedAt: new Date()
+    });
+
+    res.status(201).json(message);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to send message: ' + err.message });
   }
 });
 
